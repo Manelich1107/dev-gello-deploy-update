@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import unittest
 
 import numpy as np
@@ -8,6 +9,7 @@ from policy_action_limiter import (
     FR3_JOINT_UPPER_RAD,
     PolicyActionLimiter,
     PolicyStartAligner,
+    add_policy_action_limit_arguments,
 )
 
 
@@ -19,6 +21,23 @@ def robot_vector(left: np.ndarray, right: np.ndarray, *, with_grippers: bool) ->
     if with_grippers:
         return np.concatenate((left, [0.08], right, [0.08]))
     return np.concatenate((left, right))
+
+
+class PolicyActionLimitArgumentTest(unittest.TestCase):
+    @staticmethod
+    def parse_limit(*arguments: str) -> bool:
+        parser = argparse.ArgumentParser()
+        add_policy_action_limit_arguments(parser)
+        return bool(parser.parse_args(list(arguments)).limit)
+
+    def test_limiter_is_enabled_by_default(self) -> None:
+        self.assertTrue(self.parse_limit())
+
+    def test_no_limit_disables_limiter(self) -> None:
+        self.assertFalse(self.parse_limit("--no-limit"))
+
+    def test_limit_remains_a_compatible_explicit_enable(self) -> None:
+        self.assertTrue(self.parse_limit("--limit"))
 
 
 class PolicyActionLimiterTest(unittest.TestCase):

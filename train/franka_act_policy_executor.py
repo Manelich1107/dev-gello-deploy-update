@@ -24,6 +24,7 @@ from policy_action_limiter import (
     LimitedArmStep,
     PolicyActionLimiter,
     PolicyStartAligner,
+    add_policy_action_limit_arguments,
 )
 
 
@@ -78,14 +79,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--zmq-host", default="127.0.0.1")
     parser.add_argument("--zmq-port", type=int, default=5555)
     parser.add_argument("--fps", type=int, default=15)
-    parser.add_argument(
-        "--limit",
-        action="store_true",
-        help=(
-            "Time-stretch only policy action segments that exceed the conservative "
-            "FR3 joint position, velocity, or acceleration envelope."
-        ),
-    )
+    add_policy_action_limit_arguments(parser)
     startup_source = parser.add_mutually_exclusive_group()
     startup_source.add_argument(
         "--policy-start",

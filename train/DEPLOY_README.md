@@ -81,7 +81,7 @@ Robot-connected machine:
 - send observations to the policy server
 - receive action chunks
 - convert policy actions into Franka-safe commands
-- optionally enforce joint position, velocity, and acceleration limits with `--limit`
+- enforce joint position, velocity, and acceleration limits by default; `--no-limit` is the explicit opt-out
 - enforce watchdog timeout and abort handling locally
 
 ROS 2 bridge on the robot machine:
@@ -322,12 +322,13 @@ python train/franka_act_policy_executor.py \
   --task "pick and place" \
   --act-aggregate-ratio-old 0.8 \
   --policy-start \
-  --limit \
   --execute
 ```
 
-`--limit` is available on both the ACT and diffusion executors. Without it, command
-generation is unchanged. With it, each absolute arm target is checked against the
+The limiter is enabled by default on both the ACT and diffusion executors. The
+legacy `--limit` flag remains accepted but is now redundant. Only `--no-limit`
+disables time-stretching and restores direct valid-target command generation.
+With the default limiter active, each absolute arm target is checked against the
 FR3 joint position range (with a `0.02 rad` margin). A target segment that would
 exceed the configured velocity or acceleration envelope is expanded into multiple
 15 Hz command steps using a quintic trajectory; a segment already inside the
@@ -344,14 +345,16 @@ and out-of-range arm targets stop the executor before that target is sent. Every
 generated step is recorded as `action_limit_step` in `samples.jsonl`; a terminal
 line such as `1 -> 6 control steps` means that policy segment was stretched.
 
-For diffusion, add the same flag to the existing executor command:
+For diffusion, live execution is limited by default as well:
 
 ```bash
 python train/franka_diffusion_policy_executor.py \
   ... \
-  --limit \
   --execute
 ```
+
+Use `--no-limit` only for an intentional comparison or diagnosis where direct
+valid-target command generation is required.
 
 Both ACT and diffusion executors support two mutually exclusive startup target
 sources:
@@ -373,14 +376,14 @@ For example, the command above can use a random episode start by replacing
 
 ```bash
 --episode-start \
---limit \
 --execute
 ```
 
 `--episode-start` requires the dataset parquet files under
 `DATASET_ROOT/data/chunk-*/*.parquet` on the Robot Host. It does not require the
-dataset videos. Use `--policy-start --limit` or `--episode-start [INDEX] --limit`
-when startup alignment and later action time-stretching are both required.
+dataset videos. Startup alignment and default action time-stretching work together
+with `--policy-start --execute` or `--episode-start [INDEX] --execute`. Older
+commands that also include `--limit` remain valid. Add `--no-limit` to opt out.
 
 Live execution ordering should be:
 
@@ -428,7 +431,8 @@ Useful executor options:
 - `--act-chunk-size-threshold` and `--act-aggregate-ratio-old` on `franka_act_policy_executor.py` to tune overlapping ACT chunks
 - `--diffusion-chunk-size-threshold` and `--diffusion-aggregate-ratio-old` on `franka_diffusion_policy_executor.py` to tune overlapping diffusion chunks
 - `--diffusion-noise-scheduler-type` and `--diffusion-num-inference-steps` on the server to override diffusion denoising at load time
-- `--limit` on either executor to time-stretch only joint target segments that exceed the conservative FR3 envelope
+- `--limit` on either executor as a backward-compatible explicit spelling of the default limiter behavior
+- `--no-limit` on either executor to disable time-stretching and send valid targets directly
 - `--policy-start` on either executor to align to the first policy target and then re-infer
 - `--episode-start [INDEX]` on either executor to align to a random or selected dataset episode start and then re-infer
 - `--command-zmq-host` and `--command-zmq-port` to match the bridge command socket
@@ -493,5 +497,5 @@ The executor should interpret actions using the same structure as the dataset:
 In practice, the executor should:
 
 - command absolute joint targets through the deployment bridge
-- reject invalid positions and time-stretch over-limit segments when `--limit` is enabled
+- reject invalid positions and time-stretch over-limit segments by default; only `--no-limit` disables time-stretching
 - stop safely if server responses are delayed or missing

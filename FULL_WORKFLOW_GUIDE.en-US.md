@@ -7,8 +7,8 @@ It is written against the current source tree. The one-click scripts and executo
 - `scripts/start_collection_duo.sh`
 - `scripts/start_deployment_duo.sh`
 - `data_collection/lerobot_collection.py --gello-reset-hold`
-- `train/franka_act_policy_executor.py --policy-start | --episode-start [INDEX] --limit`
-- `train/franka_diffusion_policy_executor.py --policy-start | --episode-start [INDEX] --limit`
+- `train/franka_act_policy_executor.py --policy-start | --episode-start [INDEX] [--no-limit]`
+- `train/franka_diffusion_policy_executor.py --policy-start | --episode-start [INDEX] [--no-limit]`
 
 ## 1. How to use the placeholders
 
@@ -80,7 +80,7 @@ The training host and policy server may be the same physical machine, but their 
 | Gripper clients | Robot | Start left then right in both one-click flows to avoid concurrent initialization timeouts |
 | Deployment bridge | Robot | Uses `deployment_duo.yaml`, starts in standby, publishes observations, accepts commands, and gates controllers |
 | Policy server | GPU host | Loads the server-visible checkpoint requested by the executor; supports deterministic or stochastic Diffusion noise |
-| ACT/Diffusion executor | Robot | Auto-activates/deactivates the bridge, supports startup alignment, optional joint time-stretching, action fusion, bounded last-command hold, and deployment logs |
+| ACT/Diffusion executor | Robot | Auto-activates/deactivates the bridge, applies joint time-stretching by default, and supports startup alignment, action fusion, bounded last-command hold, and deployment logs |
 
 ### SSH command templates
 
@@ -108,7 +108,7 @@ When training and policy serving use the same host, open separate SSH terminals 
 4. Never start a GELLO publisher during policy deployment.
 5. Never run direct `pylibfranka` initialization while ROS arm controllers have the robot connection.
 6. Run the executor without `--execute` first. Confirm state/action dimensions, camera keys, latency, and finite policy outputs.
-7. `--limit` validates and time-stretches joint-space targets. It does not prove Cartesian collision safety or task safety.
+7. Joint-space limiting and time-stretching are enabled by default. `--no-limit` disables them but does not remove the remaining validity checks, and neither mode proves Cartesian collision safety or task safety.
 8. Stop an unexpected motion immediately. Do not repeatedly clear a Franka reflex without identifying the command that caused it.
 
 ## 4. Repository and environment setup
@@ -747,7 +747,7 @@ Proceed only after confirming:
 
 ### 8.7 ACT live execution
 
-Restart the ACT executor and add the desired startup mode, `--limit`, and `--execute`:
+Restart the ACT executor and add the desired startup mode and `--execute`. The limiter is already enabled:
 
 ```bash
 python train/franka_act_policy_executor.py \
@@ -768,7 +768,6 @@ python train/franka_act_policy_executor.py \
   --fusion-horizon <FUSION_HORIZON_STEPS> \
   --buffer-horizon <EMPTY_QUEUE_HOLD_STEPS> \
   <ONE_STARTUP_ALIGNMENT_OPTION_OR_NOTHING> \
-  --limit \
   --execute
 ```
 
@@ -822,7 +821,6 @@ After the dry run passes, restart with the same arguments and add:
 
 ```bash
 <ONE_STARTUP_ALIGNMENT_OPTION_OR_NOTHING> \
---limit \
 --execute
 ```
 
@@ -849,15 +847,17 @@ Executor parameter constraints:
 | `--buffer-horizon` | Number of last-command hold steps allowed while waiting for a new chunk |
 | `--policy-start` / `--episode-start` | At most one; live execution only |
 
-### 8.10 What `--limit` changes
+### 8.10 Default limiter and `--no-limit`
 
-Without `--limit`, command generation remains unchanged.
+Joint position, velocity, and acceleration limiting is enabled by default for both executors. Omitting both limiter flags still creates a `PolicyActionLimiter` and time-stretches over-limit segments.
 
-With `--limit`, each absolute arm target is checked against the configured conservative FR3 joint position, velocity, and acceleration envelope. An over-limit segment is expanded into additional control steps using a quintic trajectory; a segment already inside the envelope remains one step. The two arms are evaluated independently, and gripper changes are emitted only on the final stretched step.
+`--limit` remains accepted for backward compatibility and explicitly selects the same default behavior. Only `--no-limit` disables time-stretching and sends valid targets directly.
+
+With the default limiter active, each absolute arm target is checked against the configured conservative FR3 joint position, velocity, and acceleration envelope. An over-limit segment is expanded into additional control steps using a quintic trajectory; a segment already inside the envelope remains one step. The two arms are evaluated independently, and gripper changes are emitted only on the final stretched step.
 
 The executor rejects NaN, infinity, and out-of-range arm targets before they are sent. Generated limiter steps are recorded in `samples.jsonl` as `action_limit_step` events.
 
-`--limit` is a local joint-space safeguard. It does not check self-collision, environment collision, Cartesian velocity, external forces, camera correctness, or whether a target is semantically sensible.
+The limiter is a local joint-space safeguard. It does not check self-collision, environment collision, Cartesian velocity, external forces, camera correctness, or whether a target is semantically sensible. Use `--no-limit` only for a deliberate comparison or diagnosis.
 
 ### 8.11 Logs and shutdown
 
@@ -1064,7 +1064,7 @@ Compare the failure timestamp across these sources before resetting. Reproduce f
 - [ ] Policy server reachable from Robot Host
 - [ ] Executor dry run passed dimensions, cameras, output, and latency checks
 - [ ] Startup source selected intentionally
-- [ ] `--limit` enabled for first live trials
+- [ ] Default limiter retained for live trials; `--no-limit` used only for an intentional diagnosis
 - [ ] Operator at emergency stop
 - [ ] Executor logs preserved after every trial
 - [ ] Executor stopped before deployment stack and policy server

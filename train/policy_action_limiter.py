@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from dataclasses import dataclass
 import math
 import time
@@ -36,6 +37,26 @@ POLICY_START_POSITION_TOLERANCE_RAD = np.array(
     [0.03, 0.03, 0.03, 0.03, 0.04, 0.05, 0.07],
     dtype=float,
 )
+
+
+def add_policy_action_limit_arguments(parser: argparse.ArgumentParser) -> None:
+    limit_group = parser.add_mutually_exclusive_group()
+    limit_group.add_argument(
+        "--limit",
+        dest="limit",
+        action="store_true",
+        help=(
+            "Enable conservative FR3 joint position, velocity, and acceleration "
+            "limits. This is the default and the flag is retained for compatibility."
+        ),
+    )
+    limit_group.add_argument(
+        "--no-limit",
+        dest="limit",
+        action="store_false",
+        help="Disable policy action limiting and send valid targets without time-stretching.",
+    )
+    parser.set_defaults(limit=True)
 
 
 @dataclass(frozen=True)

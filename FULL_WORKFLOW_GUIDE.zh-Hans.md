@@ -7,8 +7,8 @@
 - `scripts/start_collection_duo.sh`
 - `scripts/start_deployment_duo.sh`
 - `data_collection/lerobot_collection.py --gello-reset-hold`
-- `train/franka_act_policy_executor.py --policy-start | --episode-start [INDEX] --limit`
-- `train/franka_diffusion_policy_executor.py --policy-start | --episode-start [INDEX] --limit`
+- `train/franka_act_policy_executor.py --policy-start | --episode-start [INDEX] [--no-limit]`
+- `train/franka_diffusion_policy_executor.py --policy-start | --episode-start [INDEX] [--no-limit]`
 
 ## 1. 占位符规则
 
@@ -80,7 +80,7 @@ Policy Server 接收 Robot Host 发来的 observation，在 GPU 上完成推理�
 | Gripper Client | Robot | 两个一键流程都先左后右启动，避免并发初始化超时 |
 | Deployment Bridge | Robot | 使用 `deployment_duo.yaml`，以 standby 启动，发布 observation、接收 command 并控制 Controller Gate |
 | Policy Server | GPU 主机 | 加载 Executor 请求的服务器侧 checkpoint；支持固定或随机 Diffusion Noise |
-| ACT/Diffusion Executor | Robot | 自动激活/关闭 Bridge，支持启动对齐、可选关节动作拉长、Action Fusion、有限 Last-Command Hold 和部署日志 |
+| ACT/Diffusion Executor | Robot | 自动激活/关闭 Bridge，默认启用关节动作拉长，并支持启动对齐、Action Fusion、有限 Last-Command Hold 和部署日志 |
 
 ### SSH 连接模板
 
@@ -108,7 +108,7 @@ ssh -p <POLICY_SSH_PORT> <POLICY_SSH_USER>@<POLICY_SSH_HOST>
 4. Policy 部署期间不要启动 GELLO Publisher。
 5. ROS Arm Controller 占用机械臂时，不要运行直接控制 Franka 的 `pylibfranka` 初始化工具。
 6. 先运行不带 `--execute` 的 dry-run，确认维度、相机键、延迟和 Policy 输出有限且稳定。
-7. `--limit` 只检查和拉长关节空间动作，不等于完成笛卡尔碰撞或任务安全验证。
+7. 关节空间限制和动作拉长默认开启。`--no-limit` 会关闭它们，但不会取消其它有效性检查；两种模式都不等于完成笛卡尔碰撞或任务安全验证。
 8. 出现异常运动立即停止，不要在未确认触发命令前反复清除 Franka reflex。
 
 ## 4. 仓库与环境配置
@@ -747,7 +747,7 @@ python train/franka_act_policy_executor.py \
 
 ### 8.7 ACT 实机执行
 
-重启 ACT Executor，加入期望的启动对齐方式、`--limit` 和 `--execute`：
+重启 ACT Executor，加入期望的启动对齐方式和 `--execute`。Limiter 已默认开启：
 
 ```bash
 python train/franka_act_policy_executor.py \
@@ -768,7 +768,6 @@ python train/franka_act_policy_executor.py \
   --fusion-horizon <FUSION_HORIZON_STEPS> \
   --buffer-horizon <EMPTY_QUEUE_HOLD_STEPS> \
   <ONE_STARTUP_ALIGNMENT_OPTION_OR_NOTHING> \
-  --limit \
   --execute
 ```
 
@@ -822,7 +821,6 @@ Dry-run 通过后，使用相同参数重新启动并增加：
 
 ```bash
 <ONE_STARTUP_ALIGNMENT_OPTION_OR_NOTHING> \
---limit \
 --execute
 ```
 
@@ -849,15 +847,17 @@ Executor 参数约束：
 | `--buffer-horizon` | 等待新 chunk 时允许保持上一命令的步数 |
 | `--policy-start` / `--episode-start` | 最多选择一个，而且只能用于实机执行 |
 
-### 8.10 `--limit` 到底改变什么
+### 8.10 默认 Limiter 与 `--no-limit`
 
-不加 `--limit` 时，动作生成行为保持原样。
+ACT 和 Diffusion Executor 都默认启用关节位置、速度和加速度限制。即使命令里两个 Limiter 参数都不写，也会创建 `PolicyActionLimiter` 并拉长超限动作。
 
-加上后，每个绝对关节目标都要经过保守 FR3 关节位置、速度、加速度范围检查。超限 segment 会用五次轨迹展开成更多控制步；原本在范围内的 segment 仍是一步。左右臂分别检查，夹爪变化只在拉长 segment 的最后一步发出。
+`--limit` 为兼容旧命令继续保留，其效果与默认行为完全相同。只有 `--no-limit` 会关闭动作拉长，并直接发送其它检查已通过的目标。
+
+默认 Limiter 开启时，每个绝对关节目标都要经过保守 FR3 关节位置、速度、加速度范围检查。超限 segment 会用五次轨迹展开成更多控制步；原本在范围内的 segment 仍是一步。左右臂分别检查，夹爪变化只在拉长 segment 的最后一步发出。
 
 NaN、无穷值和越界关节目标会在发送前被拒绝。生成的限速步骤会以 `action_limit_step` 事件写入 `samples.jsonl`。
 
-`--limit` 是本地关节空间防护，不检查自碰、环境碰撞、笛卡尔速度、外力、相机正确性，也不判断目标动作是否符合任务语义。
+Limiter 是本地关节空间防护，不检查自碰、环境碰撞、笛卡尔速度、外力、相机正确性，也不判断目标动作是否符合任务语义。只应在明确对比或诊断时使用 `--no-limit`。
 
 ### 8.11 日志与停机顺序
 
@@ -1064,7 +1064,7 @@ source install/setup.bash
 - [ ] Robot Host 能访问 Policy Server
 - [ ] Executor dry-run 的维度、相机、输出和延迟检查通过
 - [ ] 有意选择 Startup Source
-- [ ] 第一次实机尝试启用 `--limit`
+- [ ] 实机测试保留默认 Limiter；只有明确诊断时才使用 `--no-limit`
 - [ ] 操作者守在急停旁边
 - [ ] 每次测试后保留 Executor 日志
 - [ ] 先停 Executor，再停 Deployment Stack 和 Policy Server
